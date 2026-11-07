@@ -1,0 +1,27 @@
+# Auto-detect text files and normalize line endings
+* text=auto
+
+# Linux scripts MUST keep LF line endings
+gradlew text eol=lf
+*.sh text eol=lf
+
+# Windows batch files MUST keep CRLF line endings
+gradlew.bat text eol=crlf
+*.bat text eol=crlf
+
+# Android code and resources
+*.kt text
+*.kts text
+*.xml text
+*.json text
+*.properties text
+*.md text
+*.html text
+
+# Binary assets (prevent corruption)
+*.jar binary
+*.png binary
+*.ttf binary
+*.ico binary
+*.webp binary
+
