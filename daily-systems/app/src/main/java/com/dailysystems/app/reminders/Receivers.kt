@@ -5,6 +5,7 @@ import android.content.Context
 import android.content.Intent
 import androidx.core.app.NotificationManagerCompat
 import com.dailysystems.app.DailySystemsApp
+import com.dailysystems.app.widget.TodayWidget
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -33,6 +34,8 @@ class RescheduleReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         // Exported for system broadcasts; ignore anything else.
         if (intent.action !in HANDLED) return
+        context.app.container.refreshToday()
+        context.app.dayRollover.schedule()
         async { context.app.reminders.scheduleNow() }
     }
 
@@ -41,6 +44,16 @@ class RescheduleReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED, Intent.ACTION_TIME_CHANGED,
             Intent.ACTION_TIMEZONE_CHANGED, "android.app.action.SCHEDULE_EXACT_ALARM_PERMISSION_STATE_CHANGED",
         )
+    }
+}
+
+/** Just after midnight (delivered when the phone next wakes): roll over to the new day. */
+class MidnightReceiver : BroadcastReceiver() {
+    override fun onReceive(context: Context, intent: Intent) = async {
+        context.app.container.refreshToday()
+        // Refresh explicitly (not only via BackgroundSync) so it finishes before the broadcast ends.
+        TodayWidget.refresh(context)
+        context.app.dayRollover.schedule()
     }
 }
 

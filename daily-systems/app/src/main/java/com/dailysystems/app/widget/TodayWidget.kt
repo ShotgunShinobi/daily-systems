@@ -44,7 +44,18 @@ import androidx.glance.text.TextStyle
 import com.dailysystems.app.DailySystemsApp
 import com.dailysystems.app.MainActivity
 import com.dailysystems.app.R
+import com.dailysystems.app.domain.DailySystem
 import com.dailysystems.app.domain.DayPlanner
+import com.dailysystems.app.domain.PriorityLabel
+import com.dailysystems.app.domain.Task
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
 import com.dailysystems.app.domain.PlannedRow
 import com.dailysystems.app.domain.StepKey
 import com.dailysystems.app.ui.Format
@@ -53,16 +64,19 @@ import kotlinx.coroutines.flow.first
 
 /** One line in the widget list. */
 sealed interface WidgetLine {
-    data class Header(val title: String, val meta: String) : WidgetLine
+    /** Stable per row, so a row keeps its identity when it is checked off. */
+    val key: String
+
+    data class Header(val title: String, val meta: String, override val key: String = "h:$title") : WidgetLine
     data class Check(
-        val key: String,
+        override val key: String,
         val title: String,
         val done: Boolean,
         val colorArgb: Int?,
         val indent: Boolean,
         val action: Toggle,
     ) : WidgetLine
-    data class Open(val key: String, val text: String) : WidgetLine
+    data class Open(override val key: String, val text: String) : WidgetLine
 }
 
 sealed interface Toggle {
@@ -72,20 +86,39 @@ sealed interface Toggle {
 
 data class WidgetData(val date: LocalDate, val done: Int, val total: Int, val lines: List<WidgetLine>)
 
-/** Builds the widget's view of Today from the same planner the app uses. */
-suspend fun loadWidgetData(context: Context, date: LocalDate = LocalDate.now()): WidgetData {
+/**
+ * The widget's view of Today, live: re-emits whenever to-dos, systems, labels, step check-offs or
+ * the date change, whoever made the change (widget, app, notification).
+ */
+@OptIn(ExperimentalCoroutinesApi::class)
+fun widgetDataFlow(context: Context, dates: Flow<LocalDate>? = null): Flow<WidgetData> {
     val c = (context.applicationContext as DailySystemsApp).container
-    val labels = c.labels.labels.first()
-    val systems = c.systems.systems.first()
-    val tasks = c.tasks.tasks.first()
-    val checked = c.systems.checkedSteps(date).first()
+    return (dates ?: c.today).flatMapLatest { date ->
+        combine(c.labels.labels, c.systems.systems, c.tasks.tasks, c.systems.checkedSteps(date)) { labels, systems, tasks, checked ->
+            buildWidgetData(date, labels, systems, tasks, checked)
+        }
+    }.distinctUntilChanged()
+}
+
+/** One snapshot (tests, previews). */
+suspend fun loadWidgetData(context: Context, date: LocalDate = LocalDate.now()): WidgetData =
+    widgetDataFlow(context, flowOf(date)).first()
+
+/** Builds the widget's view of Today from the same planner the app uses. */
+fun buildWidgetData(
+    date: LocalDate,
+    labels: List<PriorityLabel>,
+    systems: List<DailySystem>,
+    tasks: List<Task>,
+    checked: Set<StepKey>,
+): WidgetData {
     val plan = DayPlanner.planDay(date, systems, tasks, labels)
     val labelMap = labels.associateBy { it.id }
     val color = { id: String? -> id?.let { labelMap[it]?.colorArgb } }
     val lines = buildList {
         plan.systems.forEach { ps ->
             val s = ps.system
-            add(WidgetLine.Header(s.name.ifBlank { "Untitled system" }, if (ps.runningForTarget) "target date" else s.reminderTime?.let(Format::time).orEmpty()))
+            add(WidgetLine.Header(s.name.ifBlank { "Untitled system" }, if (ps.runningForTarget) "target date" else s.reminderTime?.let(Format::time).orEmpty(), key = "h:${s.id}"))
             ps.rows.forEach { row ->
                 when (row) {
                     is PlannedRow.Step -> add(
@@ -115,8 +148,15 @@ suspend fun loadWidgetData(context: Context, date: LocalDate = LocalDate.now()):
 
 class TodayWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
-        val data = loadWidgetData(context)
-        provideContent { WidgetBody(data) }
+        // Collect inside the composition: Glance keeps a widget's session alive for a while
+        // after each interaction and only recomposes it on update(), so a snapshot taken here
+        // would stay stale until the session ended.
+        val live = widgetDataFlow(context)
+        val initial = live.first()
+        provideContent {
+            val data by live.collectAsState(initial)
+            WidgetBody(data)
+        }
     }
 
     companion object {
@@ -165,7 +205,7 @@ private fun WidgetBody(d: WidgetData) {
             }
         } else {
             LazyColumn(GlanceModifier.fillMaxSize()) {
-                items(d.lines, itemId = { it.hashCode().toLong() }) { line -> LineView(line) }
+                items(d.lines, itemId = { it.key.hashCode().toLong() }) { line -> LineView(line) }
             }
         }
     }

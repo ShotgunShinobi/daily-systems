@@ -13,4 +13,12 @@ class MainActivity : ComponentActivity() {
         val container = (application as DailySystemsApp).container
         setContent { DailySystemsRoot(container) }
     }
+
+    /** Coming back after midnight: Today moves to the new date straight away. */
+    override fun onResume() {
+        super.onResume()
+        val app = application as DailySystemsApp
+        app.container.refreshToday()
+        app.dayRollover.schedule()
+    }
 }

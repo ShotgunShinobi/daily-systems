@@ -10,30 +10,29 @@ import com.dailysystems.app.data.NoteRepository
 import com.dailysystems.app.data.StarterExamples
 import com.dailysystems.app.data.SystemRepository
 import com.dailysystems.app.data.TaskRepository
-import java.time.Duration
 import java.time.LocalDate
-import java.time.LocalDateTime
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.completeWith
-import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.launch
 
 /** Manual DI: one instance per process, owned by [DailySystemsApp]. */
 class AppContainer(
     val db: AppDatabase,
-    /** Source of "today"; replaced in tests. */
-    todaySource: Flow<LocalDate> = midnightTicker(),
+    /** Fixed source of "today" for tests; null = the real clock, refreshed by [refreshToday]. */
+    todaySource: Flow<LocalDate>? = null,
     val settings: SettingsStore = InMemorySettingsStore(),
+    /** Reads the current date; replaced in tests. */
+    private val dateClock: () -> LocalDate = { LocalDate.now() },
 ) {
     /** Outlives screens, so writes fired as a sheet closes still complete. */
     val appScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -44,9 +43,19 @@ class AppContainer(
     val notes = NoteRepository(db)
     val starterExamples = StarterExamples(db, labels, tasks, systems, notes)
 
-    /** The current date; ticks over after midnight so Today refreshes (SPEC §6). */
-    val today: StateFlow<LocalDate> = todaySource.distinctUntilChanged()
-        .stateIn(appScope, SharingStarted.Eagerly, LocalDate.now())
+    private val clockDate = MutableStateFlow(dateClock())
+
+    /**
+     * The current date (SPEC §6 day rollover). Nothing polls the clock: [refreshToday] is called by
+     * the midnight alarm, when the app comes to the foreground, and on clock/time-zone changes.
+     */
+    val today: StateFlow<LocalDate> = (todaySource ?: clockDate).distinctUntilChanged()
+        .stateIn(appScope, SharingStarted.Eagerly, todaySource?.let { LocalDate.now() } ?: clockDate.value)
+
+    /** Re-read the clock; a no-op unless the date actually changed. */
+    fun refreshToday() {
+        clockDate.value = dateClock()
+    }
 
     // Edits save immediately, one keystroke at a time. A single consumer keeps them in order.
     private val writes = Channel<suspend () -> Unit>(Channel.UNLIMITED)
@@ -77,13 +86,5 @@ class AppContainer(
         fun create(context: Context) =
             AppContainer(AppDatabase.build(context.applicationContext), settings = PrefsSettingsStore(context.applicationContext))
 
-        fun midnightTicker(): Flow<LocalDate> = flow {
-            while (true) {
-                emit(LocalDate.now())
-                val now = LocalDateTime.now()
-                val untilMidnight = Duration.between(now, now.toLocalDate().plusDays(1).atStartOfDay()).toMillis()
-                delay((untilMidnight + 50).coerceIn(1_000, 60_000))
-            }
-        }
     }
 }

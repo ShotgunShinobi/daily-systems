@@ -195,7 +195,7 @@ Follow the prototype's look; Material 3 as the base, customised:
 - minSdk 26, target/compile the current stable SDK. Use current stable AGP, Kotlin, Compose BOM — don't pin outdated versions.
 - Package: `com.dailysystems.app` (rename freely).
 - Layers: `data` (Room entities, DAOs, repositories) → `domain` (models, `DayPlanner`, use cases) → `ui` (screens, components, theme).
-- Day rollover: Today screen observes the current date and refreshes after midnight.
+- Day rollover: Today screen observes the current date and refreshes after midnight. Nothing polls the clock: the date is re-read by a non-wakeup alarm just after midnight (delivered when the phone next wakes), when the app comes to the foreground, and on clock/time-zone changes.
 - v1 is offline-only. No accounts, no sync.
 
 ### Out of scope for v1 (candidates for v2)
@@ -211,7 +211,7 @@ DB version 2 (Room auto-migration from v1; all new columns nullable or defaulted
 
 **Recurring to-dos.** `Task.repeat = RepeatRule(unit DAY|WEEK|MONTH|YEAR, interval ≥ 1, weekdays (WEEK), anchor)`; occurrences are counted from the anchor, so monthly/yearly never drift (31st → 28th/29th/30th in short months, back to the 31st after). A repeat needs a date (setting one dates an undated to-do; clearing the date clears the repeat; moving the date re-anchors). Checking off an occurrence on day D keeps it done in place (§3 property 1) and creates the next open occurrence at the first rule date after max(dueDate, D), carrying title, label, notes, reminder, system and rule (`seriesId` links them). Un-checking it again, while that next occurrence is still the open one, folds it back.
 
-**Home-screen widget** (Glance). Today's plan from `DayPlanner`: date, progress, each running system with its steps and slot to-dos, open slots, and "Also due". Tapping a row checks it off for today; tapping the header opens the app. Refreshes on every data change, at midnight, and every 30 minutes.
+**Home-screen widget** (Glance). Today's plan from `DayPlanner`: date, progress, each running system with its steps and slot to-dos, open slots, and "Also due". Tapping a row checks it off for today; tapping the header opens the app. Refreshes live on every data change (it collects the database while Android keeps its session open) and at midnight via the non-wakeup rollover alarm; no timed refresh, so it never wakes the phone by itself.
 
 **Drag-to-reorder.** System items (editor) and labels (manager) reorder by dragging the grip; the move is saved on drop. The grip offers "Move up"/"Move down" accessibility actions in place of the old arrow buttons.
 

@@ -13,6 +13,7 @@ import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.LocalTime
 import java.time.ZoneId
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -102,5 +103,27 @@ class RemindersAndWidgetTest {
         assertEquals("Habit starts now", n.extras.getString("android.title"))
         assertTrue(n.extras.getCharSequence("android.text").toString().startsWith("Missed last time"))
         check(zone == ZoneId.systemDefault())
+    }
+
+    @Test
+    fun widgetDataIsLiveSoAWidgetTapShowsUpRightAway() = runBlocking {
+        c.starterExamples.load(today)
+        val emissions = mutableListOf<com.dailysystems.app.widget.WidgetData>()
+        val job = launch(kotlinx.coroutines.Dispatchers.Default) {
+            com.dailysystems.app.widget.widgetDataFlow(app, kotlinx.coroutines.flow.flowOf(today)).collect { emissions += it }
+        }
+        kotlinx.coroutines.withTimeout(5_000) { while (emissions.isEmpty()) kotlinx.coroutines.delay(20) }
+        val bill = emissions.last().lines.filterIsInstance<WidgetLine.Check>().single { it.title == "Pay electricity bill" }
+        assertEquals(false, bill.done)
+
+        // Same write the widget's tap action makes; no explicit widget update needed.
+        c.writeAwait { c.tasks.toggleDone((bill.action as com.dailysystems.app.widget.Toggle.Todo).taskId, today) }
+        kotlinx.coroutines.withTimeout(5_000) {
+            while (emissions.last().lines.filterIsInstance<WidgetLine.Check>().none { it.title == "Pay electricity bill" && it.done }) kotlinx.coroutines.delay(20)
+        }
+        assertEquals(1, emissions.last().done)
+        // The row keeps its key when checked, so the list item keeps its identity.
+        assertEquals(bill.key, emissions.last().lines.filterIsInstance<WidgetLine.Check>().single { it.title == "Pay electricity bill" }.key)
+        job.cancel()
     }
 }
